@@ -1,0 +1,10 @@
+{
+  "newDependencies": {
+    "@tensorflow/tfjs": "^4.10.0",
+    "@tensorflow/tfjs-react-native": "^0.8.0",
+    "react-native-webgl": "^0.8.0",
+    "react-native-push-notification": "^8.1.1",
+    "react-native-share": "^9.4.1",
+    "socket.io-client": "^4.5.4"
+  }
+}
