@@ -1,318 +1,602 @@
-// app/(tabs)/draw.tsx - SIMPLIFIED VERSION TO PREVENT CRASHES
-import React, { useRef, useState, useEffect } from 'react';
-import { View, StyleSheet, Dimensions, Text, TouchableOpacity } from 'react-native';
+// app/(tabs)/draw.tsx - Production-Grade Drawing Screen
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  StyleSheet,
+  Dimensions,
+  Text,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// Conditionally import canvas components with error boundaries
-let ProfessionalCanvas: any = null;
-let DrawingTools: any = null;
-try {
-  // Try to import the canvas components
-  const CanvasModule = require('../../src/engines/drawing/ProfessionalCanvas');
-  ProfessionalCanvas = CanvasModule.ProfessionalCanvas || CanvasModule.default;
-  
-  const ToolsModule = require('../../src/components/Canvas/DrawingTools');
-  DrawingTools = ToolsModule.DrawingTools || ToolsModule.default;
-} catch (error) {
-  console.warn('⚠️ Canvas components not available:', error);
-}
-// Simple fallback canvas for when Skia isn't available
-const FallbackCanvas: React.FC<any> = ({ onReady }) => {
+// Feature flags (what Meta would do)
+const FEATURE_FLAGS = {
+  USE_PROFESSIONAL_ENGINE: false, // Start with false, enable gradually
+  USE_METAL_ACCELERATION: false,
+  USE_TILE_SYSTEM: false,
+  ENABLE_APPLE_PENCIL: true,
+  ENABLE_PERFORMANCE_MONITORING: true,
+};
+
+// Import with proper error handling
+const loadDrawingEngine = async () => {
+  try {
+    // Dynamic imports for code splitting
+    const [engineModule, canvasModule, toolsModule] = await Promise.all([
+      import('../../src/engines/drawing'),
+      import('../../src/engines/drawing/Canvas'),
+      import('../../src/components/Canvas/DrawingTools'),
+    ]);
+
+    return {
+      engine: engineModule.EnterpriseDrawingEngine,
+      canvas: canvasModule.DrawingCanvas,
+      tools: toolsModule.DrawingTools,
+    };
+  } catch (error) {
+    console.error('Failed to load drawing engine:', error);
+    return null;
+  }
+};
+
+// Professional fallback canvas component
+const FallbackCanvas: React.FC<{
+  onReady: () => void;
+  onStrokeStart?: (event: any) => void;
+  onStrokeMove?: (event: any) => void;
+  onStrokeEnd?: (event: any) => void;
+}> = ({ onReady, onStrokeStart, onStrokeMove, onStrokeEnd }) => {
+  const canvasRef = useRef<any>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
   useEffect(() => {
-    // Simulate canvas ready after a delay
+    // Initialize fallback canvas
     setTimeout(() => {
-      onReady?.();
-    }, 500);
+      onReady();
+    }, 100);
   }, [onReady]);
+
+  const handleTouchStart = useCallback((event: any) => {
+    setIsDrawing(true);
+    const touch = event.nativeEvent.touches[0];
+    onStrokeStart?.({
+      x: touch.pageX,
+      y: touch.pageY,
+      pressure: 0.5,
+      timestamp: Date.now(),
+    });
+  }, [onStrokeStart]);
+
+  const handleTouchMove = useCallback((event: any) => {
+    if (!isDrawing) return;
+    const touch = event.nativeEvent.touches[0];
+    onStrokeMove?.({
+      x: touch.pageX,
+      y: touch.pageY,
+      pressure: 0.5,
+      timestamp: Date.now(),
+    });
+  }, [isDrawing, onStrokeMove]);
+
+  const handleTouchEnd = useCallback(() => {
+    setIsDrawing(false);
+    onStrokeEnd?.({ timestamp: Date.now() });
+  }, [onStrokeEnd]);
+
   return (
-    <View style={styles.fallbackCanvas}>
-      <Text style={styles.fallbackText}>🎨</Text>
-      <Text style={styles.fallbackTitle}>Drawing Canvas</Text>
-      <Text style={styles.fallbackSubtitle}>Professional drawing coming soon!</Text>
-      <Text style={styles.fallbackInstruction}>
-        The full Skia-powered drawing engine is being optimized for better performance.
-      </Text>
+    <View
+      ref={canvasRef}
+      style={styles.canvas}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      <View style={styles.canvasContent}>
+        <Text style={styles.canvasEmoji}>🎨</Text>
+        <Text style={styles.canvasTitle}>Touch to Draw</Text>
+      </View>
     </View>
   );
 };
-// Simple fallback tools
-const FallbackTools: React.FC = () => {
-  const [selectedTool, setSelectedTool] = useState('brush');
-  const [brushSize, setBrushSize] = useState(10);
-  const [color, setColor] = useState('#000000');
+
+// Professional drawing tools component
+const DrawingToolsBar: React.FC<{
+  selectedTool: string;
+  onToolChange: (tool: string) => void;
+  brushSize: number;
+  onSizeChange: (size: number) => void;
+  color: string;
+  onColorChange: (color: string) => void;
+}> = ({ selectedTool, onToolChange, brushSize, onSizeChange, color, onColorChange }) => {
   const tools = [
-    { id: 'brush', name: 'Brush', icon: '🖌️' },
-    { id: 'eraser', name: 'Eraser', icon: '🧹' },
-    { id: 'pan', name: 'Pan', icon: '✋' },
+    { id: 'brush', icon: '🖌️', name: 'Brush' },
+    { id: 'eraser', icon: '🧹', name: 'Eraser' },
+    { id: 'move', icon: '✋', name: 'Move' },
   ];
-  const colors = ['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00'];
+
+  const colors = ['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF'];
   const sizes = [2, 5, 10, 20, 40];
-    <View style={styles.fallbackTools}>
-      {/* Tools */}
-      <View style={styles.toolsSection}>
-        <Text style={styles.sectionTitle}>Tools</Text>
-        {tools.map(tool => (
+
+  return (
+    <View style={styles.toolsContainer}>
+      {/* Tool Selection */}
+      <View style={styles.toolSection}>
+        {tools.map((tool) => (
           <TouchableOpacity
             key={tool.id}
-            style={[
-              styles.toolButton,
-              selectedTool === tool.id && styles.toolButtonActive
-            ]}
-            onPress={() => setSelectedTool(tool.id)}
+            style={[styles.toolButton, selectedTool === tool.id && styles.toolButtonActive]}
+            onPress={() => onToolChange(tool.id)}
           >
             <Text style={styles.toolIcon}>{tool.icon}</Text>
-            <Text style={styles.toolName}>{tool.name}</Text>
           </TouchableOpacity>
         ))}
       </View>
-      {/* Colors */}
-        <Text style={styles.sectionTitle}>Colors</Text>
-        <View style={styles.colorGrid}>
-          {colors.map(c => (
-            <TouchableOpacity
-              key={c}
+
+      {/* Color Selection */}
+      <View style={styles.colorSection}>
+        {colors.map((c) => (
+          <TouchableOpacity
+            key={c}
+            style={[
+              styles.colorButton,
+              { backgroundColor: c },
+              color === c && styles.colorButtonActive,
+            ]}
+            onPress={() => onColorChange(c)}
+          />
+        ))}
+      </View>
+
+      {/* Size Selection */}
+      <View style={styles.sizeSection}>
+        {sizes.map((size) => (
+          <TouchableOpacity
+            key={size}
+            style={[styles.sizeButton, brushSize === size && styles.sizeButtonActive]}
+            onPress={() => onSizeChange(size)}
+          >
+            <View
               style={[
-                styles.colorButton,
-                { backgroundColor: c },
-                color === c && styles.colorButtonActive
+                styles.sizeIndicator,
+                { width: size / 2, height: size / 2, backgroundColor: color },
               ]}
-              onPress={() => setColor(c)}
             />
-          ))}
-        </View>
-      {/* Sizes */}
-        <Text style={styles.sectionTitle}>Size: {brushSize}</Text>
-        <View style={styles.sizeGrid}>
-          {sizes.map(size => (
-              key={size}
-                styles.sizeButton,
-                brushSize === size && styles.sizeButtonActive
-              onPress={() => setBrushSize(size)}
-            >
-              <View style={[styles.sizePreview, { width: size, height: size }]} />
-            </TouchableOpacity>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+};
+
+// Main Drawing Screen Component
 export default function DrawScreen() {
-  const canvasRef = useRef(null);
-  const [isCanvasReady, setIsCanvasReady] = useState(false);
-  const [useSkia, setUseSkia] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-    // Check if we can use the Skia canvas
-    const checkSkiaAvailability = () => {
-      try {
-        if (ProfessionalCanvas && DrawingTools) {
-          console.log('✅ Skia canvas components available');
-          setUseSkia(true);
-        } else {
-          console.log('⚠️ Using fallback canvas');
-          setUseSkia(false);
-        }
-      } catch (err) {
-        console.error('❌ Error checking Skia availability:', err);
-        setError('Canvas initialization failed');
-        setUseSkia(false);
+  // State management
+  const [engineState, setEngineState] = useState<{
+    isLoading: boolean;
+    isReady: boolean;
+    error: string | null;
+    engine: any | null;
+    components: any | null;
+  }>({
+    isLoading: true,
+    isReady: false,
+    error: null,
+    engine: null,
+    components: null,
+  });
+
+  const [drawingState, setDrawingState] = useState({
+    tool: 'brush',
+    brushSize: 10,
+    color: '#000000',
+    isDrawing: false,
+  });
+
+  const [performanceMetrics, setPerformanceMetrics] = useState({
+    fps: 0,
+    strokeLatency: 0,
+    memoryUsage: 0,
+  });
+
+  // Refs
+  const engineRef = useRef<any>(null);
+  const canvasRef = useRef<any>(null);
+
+  // Initialize drawing engine
+  useEffect(() => {
+    initializeEngine();
+
+    return () => {
+      // Cleanup on unmount
+      if (engineRef.current) {
+        engineRef.current.shutdown();
       }
     };
-    checkSkiaAvailability();
   }, []);
-  const handleCanvasReady = () => {
-    setIsCanvasReady(true);
-    console.log('✅ Canvas ready for drawing');
+
+  const initializeEngine = async () => {
+    try {
+      setEngineState((prev) => ({ ...prev, isLoading: true, error: null }));
+
+      if (FEATURE_FLAGS.USE_PROFESSIONAL_ENGINE) {
+        // Load professional engine
+        const components = await loadDrawingEngine();
+        
+        if (components) {
+          const engine = await components.engine.create({
+            targetFPS: 60,
+            canvasSize: { width: Dimensions.get('window').width, height: Dimensions.get('window').height },
+            gpuAcceleration: {
+              enabled: FEATURE_FLAGS.USE_METAL_ACCELERATION,
+              preferMetal: true,
+              fallbackToSkia: true,
+            },
+          });
+
+          engineRef.current = engine;
+          
+          setEngineState({
+            isLoading: false,
+            isReady: true,
+            error: null,
+            engine,
+            components,
+          });
+
+          // Start performance monitoring
+          if (FEATURE_FLAGS.ENABLE_PERFORMANCE_MONITORING) {
+            startPerformanceMonitoring();
+          }
+        } else {
+          throw new Error('Failed to load drawing components');
+        }
+      } else {
+        // Use fallback for now
+        setEngineState({
+          isLoading: false,
+          isReady: true,
+          error: null,
+          engine: null,
+          components: null,
+        });
+      }
+    } catch (error: any) {
+      console.error('Engine initialization failed:', error);
+      setEngineState({
+        isLoading: false,
+        isReady: false,
+        error: error.message || 'Unknown error',
+        engine: null,
+        components: null,
+      });
+    }
   };
-  const handleError = (error: any) => {
-    console.error('❌ Canvas error:', error);
-    setError('Drawing canvas encountered an error');
-    setUseSkia(false);
-  const retrySkiaCanvas = () => {
-    setError(null);
-    setUseSkia(true);
-    setIsCanvasReady(false);
-  if (error) {
+
+  const startPerformanceMonitoring = () => {
+    if (!engineRef.current) return;
+
+    const interval = setInterval(() => {
+      const metrics = engineRef.current.getPerformanceMetrics();
+      setPerformanceMetrics({
+        fps: metrics.fps || 0,
+        strokeLatency: metrics.strokeLatency || 0,
+        memoryUsage: metrics.memoryUsage || 0,
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  };
+
+  // Drawing event handlers
+  const handleStrokeStart = useCallback((event: any) => {
+    setDrawingState((prev) => ({ ...prev, isDrawing: true }));
+    
+    if (engineRef.current) {
+      const { tool, brushSize, color } = drawingState;
+      engineRef.current.startStroke({
+        point: { x: event.x, y: event.y, pressure: event.pressure },
+        tool,
+        brush: { size: brushSize },
+        color: { hex: color },
+      });
+    }
+  }, [drawingState]);
+
+  const handleStrokeMove = useCallback((event: any) => {
+    if (!drawingState.isDrawing) return;
+    
+    if (engineRef.current) {
+      engineRef.current.addPointToStroke({
+        x: event.x,
+        y: event.y,
+        pressure: event.pressure,
+      });
+    }
+  }, [drawingState.isDrawing]);
+
+  const handleStrokeEnd = useCallback(() => {
+    setDrawingState((prev) => ({ ...prev, isDrawing: false }));
+    
+    if (engineRef.current) {
+      engineRef.current.endStroke();
+    }
+  }, []);
+
+  // Error recovery
+  const handleRetry = () => {
+    initializeEngine();
+  };
+
+  // Render loading state
+  if (engineState.isLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingText}>Initializing Drawing Engine...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Render error state
+  if (engineState.error) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.errorContainer}>
           <Text style={styles.errorIcon}>⚠️</Text>
           <Text style={styles.errorTitle}>Drawing Engine Error</Text>
-          <Text style={styles.errorMessage}>{error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={retrySkiaCanvas}>
-            <Text style={styles.retryButtonText}>Try Skia Canvas</Text>
-          <TouchableOpacity 
-            style={[styles.retryButton, styles.fallbackButton]} 
+          <Text style={styles.errorMessage}>{engineState.error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.retryButton, styles.secondaryButton]}
             onPress={() => {
-              setError(null);
-              setUseSkia(false);
+              // Force fallback mode
+              setEngineState({
+                isLoading: false,
+                isReady: true,
+                error: null,
+                engine: null,
+                components: null,
+              });
             }}
+          >
             <Text style={styles.retryButtonText}>Use Simple Canvas</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     );
   }
+
+  // Render main drawing interface
+  const DrawingCanvas = engineState.components?.canvas || FallbackCanvas;
+
+  return (
     <SafeAreaView style={styles.container}>
       <View style={styles.canvasContainer}>
-        {useSkia && ProfessionalCanvas ? (
-          <ErrorBoundary onError={handleError}>
-            <ProfessionalCanvas
-              ref={canvasRef}
-              onReady={handleCanvasReady}
-              settings={{
-                pressureSensitivity: 1.0,
-                tiltSensitivity: 1.0,
-                smoothing: 0.5,
-                predictiveStroke: true,
-                palmRejection: true,
-              }}
-          </ErrorBoundary>
-        ) : (
-          <FallbackCanvas onReady={handleCanvasReady} />
-        )}
-      
-      {isCanvasReady && (
-        <View style={styles.toolsContainer}>
-          {useSkia && DrawingTools ? (
-            <ErrorBoundary onError={() => console.warn('Tools error, using fallback')}>
-              <DrawingTools />
-            </ErrorBoundary>
-          ) : (
-            <FallbackTools />
-          )}
+        <DrawingCanvas
+          ref={canvasRef}
+          width={Dimensions.get('window').width}
+          height={Dimensions.get('window').height}
+          onReady={() => console.log('Canvas ready')}
+          onStrokeStart={handleStrokeStart}
+          onStrokeMove={handleStrokeMove}
+          onStrokeEnd={handleStrokeEnd}
+          engine={engineRef.current}
+        />
+      </View>
+
+      <DrawingToolsBar
+        selectedTool={drawingState.tool}
+        onToolChange={(tool) => setDrawingState((prev) => ({ ...prev, tool }))}
+        brushSize={drawingState.brushSize}
+        onSizeChange={(size) => setDrawingState((prev) => ({ ...prev, brushSize: size }))}
+        color={drawingState.color}
+        onColorChange={(color) => setDrawingState((prev) => ({ ...prev, color }))}
+      />
+
+      {/* Performance Monitor (dev only) */}
+      {FEATURE_FLAGS.ENABLE_PERFORMANCE_MONITORING && __DEV__ && (
+        <View style={styles.performanceMonitor}>
+          <Text style={styles.perfText}>FPS: {performanceMetrics.fps}</Text>
+          <Text style={styles.perfText}>Latency: {performanceMetrics.strokeLatency}ms</Text>
+          <Text style={styles.perfText}>Memory: {performanceMetrics.memoryUsage}MB</Text>
+        </View>
       )}
-      {/* Canvas Type Indicator */}
-      <View style={styles.canvasTypeIndicator}>
-        <Text style={styles.canvasTypeText}>
-          {useSkia ? '🚀 Skia Canvas' : '🎨 Simple Canvas'}
+
+      {/* Engine Status */}
+      <View style={styles.engineStatus}>
+        <Text style={styles.statusText}>
+          {engineState.engine ? '🚀 Professional Engine' : '🎨 Simple Canvas'}
         </Text>
+      </View>
     </SafeAreaView>
-// Simple Error Boundary Component
-class ErrorBoundary extends React.Component<
-  { children: React.ReactNode; onError?: (error: any) => void },
-  { hasError: boolean }
-> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false };
-  static getDerivedStateFromError(error: any) {
-    return { hasError: true };
-  componentDidCatch(error: any, errorInfo: any) {
-    console.error('🚨 Error Boundary caught an error:', error, errorInfo);
-    this.props.onError?.(error);
-  render() {
-    if (this.state.hasError) {
-      return (
-        <View style={styles.errorBoundary}>
-          <Text style={styles.errorBoundaryText}>Component crashed</Text>
-      );
-    }
-    return this.props.children;
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#000',
   },
   canvasContainer: {
-  toolsContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    pointerEvents: 'box-none',
-  // Fallback Canvas Styles
-  fallbackCanvas: {
+    flex: 1,
+  },
+  canvas: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  canvasContent: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    padding: 40,
-  fallbackText: {
+  },
+  canvasEmoji: {
     fontSize: 64,
-    marginBottom: 20,
-  fallbackTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  fallbackSubtitle: {
-    fontSize: 16,
+    marginBottom: 16,
+  },
+  canvasTitle: {
+    fontSize: 18,
     color: '#666',
-    textAlign: 'center',
-  fallbackInstruction: {
-    fontSize: 14,
-    color: '#999',
-    lineHeight: 20,
-  // Fallback Tools Styles
-  fallbackTools: {
+  },
+  
+  // Tools styles
+  toolsContainer: {
+    position: 'absolute',
     left: 20,
     top: 100,
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderRadius: 12,
-    padding: 16,
-    minWidth: 120,
+    padding: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 5,
-  toolsSection: {
-    marginBottom: 16,
-  sectionTitle: {
-  toolButton: {
+  },
+  toolSection: {
     flexDirection: 'row',
-    padding: 8,
-    borderRadius: 6,
-    marginBottom: 4,
-  toolButtonActive: {
-    backgroundColor: '#007AFF20',
-  toolIcon: {
+    marginBottom: 12,
+  },
+  toolButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 8,
     marginRight: 8,
-  toolName: {
-    fontSize: 12,
-  colorGrid: {
-    flexWrap: 'wrap',
-  colorButton: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    margin: 2,
-    borderWidth: 1,
-    borderColor: '#ccc',
-  colorButtonActive: {
-    borderWidth: 2,
-    borderColor: '#007AFF',
-  sizeGrid: {
-  sizeButton: {
-    padding: 4,
-    borderRadius: 4,
-  sizeButtonActive: {
-  sizePreview: {
-    backgroundColor: '#333',
-  // Error Styles
-  errorContainer: {
-    backgroundColor: '#f5f5f5',
-  errorIcon: {
-    fontSize: 48,
-  errorTitle: {
+    backgroundColor: '#f0f0f0',
+  },
+  toolButtonActive: {
+    backgroundColor: '#007AFF',
+  },
+  toolIcon: {
     fontSize: 20,
+  },
+  
+  // Color styles
+  colorSection: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 12,
+    width: 144,
+  },
+  colorButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    margin: 4,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  colorButtonActive: {
+    borderColor: '#007AFF',
+    borderWidth: 3,
+  },
+  
+  // Size styles
+  sizeSection: {
+    flexDirection: 'row',
+  },
+  sizeButton: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 8,
+    marginRight: 4,
+    backgroundColor: '#f0f0f0',
+  },
+  sizeButtonActive: {
+    backgroundColor: '#007AFF20',
+  },
+  sizeIndicator: {
+    borderRadius: 20,
+  },
+  
+  // Loading styles
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
+  },
+  
+  // Error styles
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  errorIcon: {
+    fontSize: 64,
+    marginBottom: 16,
+  },
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#333',
+  },
   errorMessage: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
     marginBottom: 24,
+  },
   retryButton: {
     backgroundColor: '#007AFF',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,
     marginBottom: 12,
-  fallbackButton: {
+  },
+  secondaryButton: {
     backgroundColor: '#666',
+  },
   retryButtonText: {
     color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
-  errorBoundary: {
-    backgroundColor: '#ffebee',
-  errorBoundaryText: {
-    color: '#c62828',
-  // Canvas Type Indicator
-  canvasTypeIndicator: {
+  },
+  
+  // Performance monitor
+  performanceMonitor: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    padding: 8,
+    borderRadius: 8,
+  },
+  perfText: {
+    color: '#0f0',
+    fontSize: 10,
+    fontFamily: 'Courier',
+  },
+  
+  // Engine status
+  engineStatus: {
+    position: 'absolute',
     top: 60,
     right: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     paddingHorizontal: 12,
     paddingVertical: 6,
-  canvasTypeText: {
-    fontWeight: '500',
+    borderRadius: 16,
+  },
+  statusText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });
